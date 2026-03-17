@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Assistant</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+    <div class="chatbot-wrapper">
+        <div class="chatbot-container">
+            <!-- Header -->
+            <div class="header">
+                <div class="header-content">
+                    <h1>Chat</h1>
+                    <button class="clear-btn" onclick="clearChat()" title="Clear chat history">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Chat Messages Container -->
+            <div class="chat-container" id="chatContainer">
+                <div class="welcome-section">
+
+                    <h2>How can I help you today?</h2>
+                </div>
+            </div>
+            
+            <!-- Input Area -->
+            <div class="input-area">
+                <div class="input-wrapper">
+                    <input 
+                        type="text" 
+                        id="messageInput" 
+                        placeholder="Message..." 
+                        autocomplete="off"
+                        onkeypress="handleKeyPress(event)"
+                    >
+                    <button class="send-btn" onclick="sendMessage()" title="Send message (Enter)">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                        <span id="sendLoader" class="loader" style="display: none;"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const chatContainer = document.getElementById('chatContainer');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.querySelector('.send-btn');
+        const sendLoader = document.getElementById('sendLoader');
+
+        /**
+         * Send user message to backend and display conversation
+         */
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            
+            if (!message) {
+                messageInput.focus();
+                return;
+            }
+            
+            // Disable input while processing
+            messageInput.disabled = true;
+            sendBtn.disabled = true;
+            sendLoader.style.display = 'inline-block';
+            
+            // Remove welcome section if it exists
+            const welcomeSection = document.querySelector('.welcome-section');
+            if (welcomeSection) {
+                welcomeSection.style.animation = 'fadeOut 0.3s ease forwards';
+                setTimeout(() => welcomeSection.remove(), 300);
+            }
+            
+            // Display user message
+            displayMessage(message, 'user');
+            
+            // Clear input field
+            messageInput.value = '';
+            
+            try {
+                // Show typing indicator
+                showTypingIndicator();
+                console.log('Sending message:', message);
+                
+                // Send message to backend
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ message: message })
+                });
+                
+                console.log('Response status:', response.status);
+                
+                // Remove typing indicator
+                removeTypingIndicator();
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    const errorMessage = errorData.error || `Error: ${response.status} ${response.statusText}`;
+                    console.error('API Error:', errorMessage);
+                    displayMessage(errorMessage, 'error');
+                    return;
+                }
+                
+                // Parse response
+                const data = await response.json();
+                console.log('Response data:', data);
+                
+                // Display bot response
+                if (data.reply) {
+                    displayMessage(data.reply, 'bot');
+                } else if (data.error) {
+                    console.error('API returned error:', data.error);
+                    displayMessage(data.error, 'error');
+                } else {
+                    console.warn('No reply in response:', data);
+                    displayMessage('No response received from AI.', 'error');
+                }
+                
+            } catch (error) {
+                removeTypingIndicator();
+                console.error('Network/Fetch error:', error);
+                displayMessage(`Connection error: ${error.message}`, 'error');
+            } finally {
+                // Re-enable input
+                messageInput.disabled = false;
+                sendBtn.disabled = false;
+                sendLoader.style.display = 'none';
+                messageInput.focus();
+            }
+        }
+
+        /**
+         * Parse markdown to HTML for professional formatting
+         */
+        function markdownToHtml(text) {
+            // Escape HTML
+            text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            
+            // Code blocks with language (```language ... ```)
+            text = text.replace(/```([a-z]*)\n([\s\S]*?)```/g, function(match, lang, code) {
+                const language = lang || 'text';
+                return `<pre><code class="language-${language}">${code.trim()}</code></pre>`;
+            });
+            
+            // Inline code (single backticks)
+            text = text.replace(/`([^`\n]+)`/g, '<code class="inline-code">$1</code>');
+            
+            // Bold text
+            text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+            text = text.replace(/__([^_\n]+)__/g, '<strong>$1</strong>');
+            
+            // Italic text
+            text = text.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+            text = text.replace(/_([^_\n]+)_/g, '<em>$1</em>');
+            
+            // Headings
+            text = text.replace(/^### ([^\n]+)$/gm, '<h3>$1</h3>');
+            text = text.replace(/^## ([^\n]+)$/gm, '<h2>$1</h2>');
+            text = text.replace(/^# ([^\n]+)$/gm, '<h1>$1</h1>');
+            
+            // Numbered lists - wrap consecutive list items
+            text = text.replace(/(<li>.*?<\/li>)/s, function(match) {
+                return match.replace(/^<li>/gm, '<li>').replace(/$/gm, '</li>');
+            });
+            text = text.replace(/(<li>[\s\S]*?<\/li>)(?=\n|$)/g, '<ol>$1</ol>');
+            
+            // Bullet lists
+            text = text.replace(/^- ([^\n]+)$/gm, '<li>$1</li>');
+            text = text.replace(/^\* ([^\n]+)$/gm, '<li>$1</li>');
+            text = text.replace(/(?:^|\n)(<li>[\s\S]*?<\/li>)(?=\n|$)/g, function(match) {
+                if (match.includes('<ol>')) return match;
+                return '\n<ul>' + match.slice(1) + '</ul>';
+            });
+            
+            // Paragraph breaks (but not before/after lists and code)
+            text = text.replace(/\n\n(?!<[ou]l>|<pre>|<h)/g, '</p><p>');
+            text = text.replace(/^(?!<[^>]+>)/gm, function(match, offset) {
+                if (offset === 0 && !text.match(/^</)) return '<p>';
+                return match;
+            });
+            if (!text.match(/<p>/)) {
+                text = '<p>' + text + '</p>';
+            }
+            text = text.replace(/<p>\s*<\/p>/g, '');
+            
+            // Links
+            text = text.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+            
+            return text;
+        }
+        
+        /**
+         * Display message in chat container
+         */
+        function displayMessage(text, sender) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message', `${sender}-message`);
+            
+            const messageContent = document.createElement('div');
+            messageContent.classList.add('message-content');
+            
+            if (sender === 'bot') {
+                messageContent.innerHTML = markdownToHtml(text);
+            } else {
+                messageContent.textContent = text;
+            }
+            
+            messageDiv.appendChild(messageContent);
+            chatContainer.appendChild(messageDiv);
+            
+            scrollToBottom();
+        }
+
+        /**
+         * Show typing indicator
+         */
+        function showTypingIndicator() {
+            const typingDiv = document.createElement('div');
+            typingDiv.classList.add('message', 'bot-message');
+            typingDiv.id = 'typingIndicator';
+            
+            const typingContent = document.createElement('div');
+            typingContent.classList.add('message-content', 'typing-indicator');
+            typingContent.innerHTML = '<span></span><span></span><span></span>';
+            
+            typingDiv.appendChild(typingContent);
+            chatContainer.appendChild(typingDiv);
+            
+            scrollToBottom();
+        }
+
+        /**
+         * Remove typing indicator
+         */
+        function removeTypingIndicator() {
+            const typingDiv = document.getElementById('typingIndicator');
+            if (typingDiv) {
+                typingDiv.style.animation = 'fadeOut 0.2s ease forwards';
+                setTimeout(() => typingDiv.remove(), 200);
+            }
+        }
+
+        /**
+         * Scroll to bottom of chat
+         */
+        function scrollToBottom() {
+            setTimeout(() => {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }, 100);
+        }
+
+        /**
+         * Handle key press
+         */
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        /**
+         * Clear chat history
+         */
+        async function clearChat() {
+            if (!confirm('Clear all messages?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/clear', {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    chatContainer.innerHTML = `
+                        <div class="welcome-section">
+                            <h2>How can I help you today?</h2>
+                        </div>
+                    `;
+                    messageInput.value = '';
+                    messageInput.focus();
+                }
+            } catch (error) {
+                console.error('Error clearing chat:', error);
+            }
+        }
+
+        // Focus input on page load
+        messageInput.focus();
+    </script>
+</body>
+</html>
